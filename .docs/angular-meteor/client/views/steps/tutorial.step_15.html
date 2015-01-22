@@ -1,0 +1,281 @@
+<template name="tutorial.step_15.html">
+  <div>
+    <a href="https://github.com/Urigo/angular-meteor/edit/master/.docs/angular-meteor/client/views/steps/tutorial.step_15.html"
+       class="btn btn-default btn-lg improve-button">
+      <i class="glyphicon glyphicon-edit">&nbsp;</i>Improve this doc
+    </a>
+    <ul class="btn-group tutorial-nav">
+      <a href="/tutorial-02/step_14"><li class="btn btn-primary"><i class="glyphicon glyphicon-step-backward"></i> Previous</li></a>
+      <a href="http://socially-step15.meteor.com/"><li class="btn btn-primary"><i class="glyphicon glyphicon-play"></i> Live Demo</li></a>
+      <a href="https://github.com/Urigo/meteor-angular-socially/compare/step_14...step_15"><li class="btn btn-primary"><i class="glyphicon glyphicon-search"></i> Code Diff</li></a>
+      <a href="/tutorial-02/step_16"><li class="btn btn-primary">Next <i class="glyphicon glyphicon-step-forward"></i></li></a>
+    </ul>
+
+    <do-nothing>
+      {{#markdown}}
+
+# Step 15 - Pagination
+
+Now we are dealing with a few parties.
+But we need to support also a large number of parties.
+
+In that case, we want to have pagination support.
+
+With pagination we can break the array of parties down to pages so the user won't have to scroll down to find a party,
+but also and even more important, we can fetch only a few parties at a time instead of all the parties collection for better performance.
+
+# angular-meteor pagination support
+
+First thing, let's add support for the built-in pagination for the parties collection in partiesList.js.
+
+All you need to do is add 'true' in the fifth parameter.
+
+    $collection(Parties).bind($scope, 'parties', true, true, true).then(
+
+Now the bind method is watching on 2 scope parameters:
+
+1. $scope.perPage - A variable that holds how many objects we want to display in each page
+2. $scope.page - A variable that holds the current page number
+
+To handle those we need to define them in our scope:
+
+    $scope.page = 1;
+    $scope.perPage = 3;
+
+
+# pagination directive
+
+In AngularJS's eco system there are a lot of directive for handling pagination.
+
+Our personal favorite is [angular-utils-pagination](https://github.com/michaelbromley/angularUtils/tree/master/src/directives/pagination).
+
+To add the directive add it's Meteor package to the project:
+
+    meteor add urigo:angular-utils-pagination
+
+Add it as a dependency to our Angular app in app.js:
+
+    angular.module('socially',[
+      'angular-meteor',
+      'ui.router',
+      'google-maps'.ns(),
+      'angularUtils.directives.dirPagination'
+    ]);
+
+
+Now let's add the directive in parties-list.html. change the ng-repeat of parties to this:
+
+    <li dir-paginate="party in parties | itemsPerPage: perPage | filter:search | orderBy:orderProperty"
+        class="party" total-items="partiesCount.count">
+
+and after the UL closes add this directive:
+
+    <dir-pagination-controls on-page-change="pageChanged(newPageNumber)"></dir-pagination-controls>
+
+as you can see, dir-paginate list takes the number of objects in array (that we defined before) but also takes the total number items (we will get to that soon).
+On the dir-pagination-controls directive there is a method on-page-change and there we can call our own function.
+
+let's create the pageChanged function inside the partiesList.js:
+
+    $scope.pageChanged = function(newPage) {
+      $scope.page = newPage;
+    };
+
+Now every time we will change the page, the scope variable will change accordingly and update the bind method that watches it.
+
+# Getting total count of a collection
+
+Getting a total count of a collection might seem easy, but there is a problem.
+The client only holds the number of object that it subscribed to. that means that if the client is not subscribed to the whole array calling find().count on a collection will result in a partial count.
+
+So we need access in the client for the total count even if we are not subscribed to the whole collection.
+
+For that we can use the [tmeasday:publish-counts](https://github.com/percolatestudio/publish-counts) package. In the command line:
+
+    meteor add tmeasday:publish-counts
+
+
+That package helps to publish the count of a cursor, in real time without dependency on the subscribe method.
+
+Inside the server -> parties.js file, add the following code inside the Meteor.publish("parties" function, at the beginning of the function. before the existing return statement:
+
+    Counts.publish(this, 'numberOfParties', Parties.find({
+      $or:[
+        {$and:[
+          {"public": true},
+          {"public": {$exists: true}}
+        ]},
+        {$and:[
+          {owner: this.userId},
+          {owner: {$exists: true}}
+        ]},
+        {$and:[
+          {invited: this.userId},
+          {invited: {$exists: true}}
+        ]}
+    ]}));
+
+Now on the client we have access to the Counts collection. let's subscribe to that in the partiesList.js file:
+
+    $collection(Counts).bindOne($scope, 'partiesCount', 'numberOfParties');
+
+Now the partiesCount will hold the number of parties and will send it to the directive in the parties-list.html (which we already defined earlier).
+
+Now run the app.
+Create lots of parties and see that you can see only 3 at a time and you can scroll between the pages with the directive that populates the number of pages automatically.
+
+# Server side pagination
+
+There is only one problem in our current solution - the server doesn't paginate.
+all the documents are sent to the client and only the client filters by pages (the current pages selectors are working on the minimongo on the client).
+
+It can work for most cases, but in some, sending too many documents to the client will result in bad performance.
+
+So the add those selectors to our server, we first should add an options parameter to our publish method:
+
+    Meteor.publish("parties", function (options) {
+
+and then send it to our parties find function:
+
+    return Parties.find({
+      $or:[
+        {$and:[
+          {"public": true},
+          {"public": {$exists: true}}
+        ]},
+      {$and:[
+        {owner: this.userId},
+        {owner: {$exists: true}}
+      ]},
+      {$and:[
+        {invited: this.userId},
+        {invited: {$exists: true}}
+      ]}
+     ]}, options);
+
+
+Read more about the options parameter [here](http://docs.meteor.com/#/full/find).
+
+Now we need to send the options parameter in our subscription.
+To do that, we can't use the subscription we used in the $collection.bind method because it doesn't support parameters,
+so we should replace it with calling directly to the [$meteorSubscribe.subscribe method](http://angularjs.meteor.com/api/subscribe).
+
+Let's add a scope function that does that (don't forget to add dependencies to the controller):
+
+    $scope.partiesSubscribe = function(){
+      return $meteorSubscribe.subscribe('parties', {
+        limit: parseInt($scope.perPage),
+        skip: (parseInt($scope.page) - 1) * parseInt($scope.perPage),
+        sort: $scope.sort
+      });
+    };
+
+We are actually copying the way angular-meteor is filtering the collection in the client side, but sending it to the server.
+
+We also need to cancel the subscription in the bind method:
+
+    $collection(Parties).bind($scope, 'parties', true, false, true);
+
+and move everything that is happening in the promise of the first subscription to the promise of the new one:
+
+    $collection(Meteor.users).bind($scope, 'users', false, true).then(function(){
+
+      $scope.partiesSubscribe().then(function(){
+
+        $collection(Parties).bind($scope, 'parties', true, false, true);
+
+        $scope.parties.forEach( function (party) {
+          party.onClicked = function () {
+            onMarkerClicked(party);
+          };
+        });
+
+        $scope.filteredParties = $scope.parties;
+
+        $scope.$watch("search", function(search){
+          $scope.filteredParties = $filter("filter")($scope.parties, search);
+        });
+
+        $scope.map = {
+          center: {
+            latitude: 45,
+            longitude: -73
+          },
+          zoom: 8
+        };
+
+        var onMarkerClicked = function(marker){
+          $state.go('partyDetails', {partyId: marker._id});
+        }
+      });
+
+      $collection(Counts).bindOne($scope, 'partiesCount', 'numberOfParties');
+    });
+
+Now we also want to to re-subscribe to our publish method each time we change the page, so the publish method will know our current page:
+
+    $scope.pageChanged = function(newPage) {
+      $scope.page = newPage;
+
+      $scope.partiesSubscribe();
+    };
+
+and the last thing we want to do, is to send the sort parameter with the options,
+because with pagination it can affect which documents will be sent to the client.
+
+So in the HTML template, let's change the values of the sorting dropdown:
+
+    <option value="1">Ascending</option>
+    <option value="-1">Descending</option>
+
+and remove the sorting filter from dir-paginate:
+
+    <li dir-paginate="party in parties | itemsPerPage: perPage | filter:search"
+
+
+in the controller lets associate that dropdown to $scope.sort:
+
+    $scope.$watch('orderProperty', function(){
+      if ($scope.orderProperty)
+        $scope.sort = {name: parseInt($scope.orderProperty)};
+
+      $scope.partiesSubscribe();
+    });
+
+and also initialize it at the beginning:
+
+    $scope.sort = { name: 1 };
+    $scope.orderProperty = '1';
+
+and remove the following line of code (old initialization):
+
+    $scope.orderProperty = 'name';
+
+
+There is a need to re-subscribe after changing the sort parameter because if the sort change will sent different documents to the client the publish
+method needs to know it.
+
+For example, if we had 4 parties and we will change the sorting, then the server will need to send the client the 4th party (which it didn't sent until now).
+
+
+We made a lot of changes so please check the step's code [here](https://github.com/Urigo/meteor-angular-socially/compare/step_14...step_15)
+to make sure you have everything needed and run the application.
+
+# Summery
+
+Now we have full pagination of client and server side with the help of Meteor's options and Angular's directives.
+
+
+      {{/markdown}}
+    </do-nothing>
+
+    <ul class="btn-group tutorial-nav">
+      <a href="/tutorial-02/step_14"><li class="btn btn-primary"><i class="glyphicon glyphicon-step-backward"></i> Previous</li></a>
+      <a href="http://socially-step15.meteor.com/"><li class="btn btn-primary"><i class="glyphicon glyphicon-play"></i> Live Demo</li></a>
+      <a href="https://github.com/Urigo/meteor-angular-socially/compare/step_14...step_15"><li class="btn btn-primary"><i class="glyphicon glyphicon-search"></i> Code Diff</li></a>
+      <a href="/tutorial-02/step_16"><li class="btn btn-primary">Next <i class="glyphicon glyphicon-step-forward"></i></li></a>
+    </ul>
+  </div>
+</template>
+
+
